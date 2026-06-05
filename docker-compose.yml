@@ -1,0 +1,113 @@
+# =============================================================
+#  SkillBridge — docker-compose.yml
+#  Запуск: docker compose up -d
+# =============================================================
+
+services:
+
+  # ── PostgreSQL ───────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: skillbridge_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       skillbridge
+      POSTGRES_USER:     skillbridge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-skillbridge_dev}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skillbridge -d skillbridge"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: skillbridge_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_dev}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:-redis_dev}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── API ──────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: skillbridge_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV:               production
+      PORT:                   4000
+      API_PREFIX:             /api/v1
+      DATABASE_URL:           postgresql://skillbridge:${POSTGRES_PASSWORD:-skillbridge_dev}@postgres:5432/skillbridge
+      REDIS_URL:              redis://:${REDIS_PASSWORD:-redis_dev}@redis:6379
+      JWT_ACCESS_SECRET:      ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET:     ${JWT_REFRESH_SECRET}
+      JWT_ACCESS_EXPIRES:     15m
+      JWT_REFRESH_EXPIRES:    30d
+      STRIPE_SECRET_KEY:      ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET:  ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PLATFORM_FEE_PCT: ${STRIPE_PLATFORM_FEE_PCT:-20}
+      RESEND_API_KEY:         ${RESEND_API_KEY:-}
+      EMAIL_FROM:             ${EMAIL_FROM:-noreply@skillbridge.com}
+      FRONTEND_URL:           ${FRONTEND_URL:-http://localhost:3000}
+      GOOGLE_CLIENT_ID:       ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET:   ${GOOGLE_CLIENT_SECRET:-}
+      GITHUB_CLIENT_ID:       ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET:   ${GITHUB_CLIENT_SECRET:-}
+      OAUTH_CALLBACK_BASE_URL: ${OAUTH_CALLBACK_BASE_URL:-http://localhost:4000/api/v1/auth}
+      DAILY_API_KEY:          ${DAILY_API_KEY:-}
+      DAILY_DOMAIN:           ${DAILY_DOMAIN:-}
+    ports:
+      - "4000:4000"
+    volumes:
+      - api_logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ── Migrate (одноразовий контейнер при старті) ────────────────
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: skillbridge_migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://skillbridge:${POSTGRES_PASSWORD:-skillbridge_dev}@postgres:5432/skillbridge
+    command: >
+      sh -c "npx prisma migrate deploy && npx tsx prisma/seed.ts"
+    restart: "no"
+
+volumes:
+  postgres_data:
+  redis_data:
+  api_logs:
+
+networks:
+  default:
+    name: skillbridge_network

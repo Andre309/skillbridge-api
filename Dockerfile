@@ -16,7 +16,7 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-RUN npx prisma generate
+RUN ./node_modules/.bin/prisma generate
 RUN ./node_modules/.bin/tsc
 
 # ── Stage 3: runner ───────────────────────────────────────────
